@@ -42,7 +42,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python main.py
+          python -u main.py
 
       - name: Save previous schedule
         run: |
@@ -52,7 +52,22 @@ jobs:
 
           if ! git diff --cached --quiet; then
             git commit -m "Update DTEK schedule state"
-            git push
+
+            for attempt in 1 2 3; do
+              if git push; then
+                echo "Schedule state successfully saved."
+                exit 0
+              fi
+
+              echo "Push attempt $attempt failed."
+
+              if [ "$attempt" -lt 3 ]; then
+                sleep 10
+              fi
+            done
+
+            echo "Could not save schedule state after 3 attempts."
+            exit 1
           else
             echo "Schedule state has not changed."
           fi
