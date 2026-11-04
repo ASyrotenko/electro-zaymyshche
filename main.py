@@ -443,7 +443,7 @@ async def get_dtek_schedule():
     ) as client:
 
         print("Перевірка адреси ДТЕК...")
-        print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
+        print(f"Адреса: {CITY}, {STREET}, {HOUSE}")
 
         try:
             address = await client.get_group_by_address(
