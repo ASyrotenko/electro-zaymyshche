@@ -1,3 +1,2 @@
 dtek-blackout-client==0.1.12
 playwright
-Pillow
