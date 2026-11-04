@@ -491,6 +491,15 @@ async def get_dtek_schedule():
 async def main():
     now = datetime.now(KYIV_TZ)
 
+    # Не перевіряємо графік з 23:00 до 08:00
+    if now.hour >= 23 or now.hour < 8:
+        print(
+            f"Зараз {now.strftime('%H:%M:%S')} за Києвом. "
+            "Нічний період (23:00–08:00). "
+            "Перевірку пропускаємо."
+        )
+        return
+
     today_date = now.strftime("%Y-%m-%d")
 
     tomorrow_date = (
