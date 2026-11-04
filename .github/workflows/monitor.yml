@@ -4,7 +4,7 @@ name: DTEK Electricity Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "17,47 * * * *"
 
 permissions:
   contents: write
