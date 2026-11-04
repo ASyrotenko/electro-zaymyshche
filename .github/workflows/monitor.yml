@@ -9,10 +9,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: dtek-electricity-monitor
-  cancel-in-progress: false
-
 jobs:
   check-schedule:
     runs-on: ubuntu-latest
