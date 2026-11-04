@@ -446,7 +446,6 @@ async def get_dtek_schedule():
         print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
 
         try:
-            # Залишено початковий спосіб пошуку адреси.
             address = await client.get_group_by_address(
                 city=CITY,
                 street=STREET,
@@ -544,13 +543,9 @@ async def main():
         or previous_state.get("tomorrow") != tomorrow
     )
 
-    # Поки графік на завтра не опублікований,
-    # повідомлення надсилається під час кожної перевірки.
-    tomorrow_notification_needed = (
-        tomorrow is None or tomorrow_changed
-    )
-
-    if today_changed or tomorrow_notification_needed:
+    # Повідомлення надсилається тільки тоді,
+    # коли змінився графік на сьогодні або завтра.
+    if today_changed or tomorrow_changed:
         message = create_telegram_message(
             today=today,
             tomorrow=tomorrow,
