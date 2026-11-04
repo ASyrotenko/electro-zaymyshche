@@ -26,7 +26,7 @@ SCHEDULE_URL = f"{BASE_URL}/ua/shutdowns"
 AJAX_URL = f"{BASE_URL}/ua/ajax"
 
 CITY = "с. Займище"
-STREET = "Центральна"
+STREET = "вул. Центральна"
 HOUSE = "21"
 
 EXPECTED_GROUP = "4.1"
