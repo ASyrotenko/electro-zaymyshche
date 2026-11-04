@@ -447,13 +447,14 @@ async def get_dtek_schedule():
 
 
 
+
 async def main():
+
+    from datetime import timedelta
 
     now = datetime.now(KYIV_TZ)
 
     today_date = now.strftime("%Y-%m-%d")
-
-    from datetime import timedelta
     tomorrow_date = (
         now + timedelta(days=1)
     ).strftime("%Y-%m-%d")
@@ -484,19 +485,11 @@ async def main():
 
     previous_state = load_previous_state() or {}
 
-    # --------------------------------------------------------
-    # ПОРІВНЯННЯ ГРАФІКА НА СЬОГОДНІ
-    # --------------------------------------------------------
-
     today_changed = (
         previous_state.get("date") != today_date
         or previous_state.get("today") != today
         or previous_state.get("group") != group
     )
-
-    # --------------------------------------------------------
-    # ПОРІВНЯННЯ ГРАФІКА НА ЗАВТРА
-    # --------------------------------------------------------
 
     tomorrow_changed = (
         previous_state.get("tomorrow_date") != tomorrow_date
@@ -504,66 +497,71 @@ async def main():
         or previous_state.get("group") != group
     )
 
-    # --------------------------------------------------------
-    # ПОВІДОМЛЕННЯ НА СЬОГОДНІ
-    # --------------------------------------------------------
+    # Повідомлення на завтра без графіка надсилаємо кожного разу.
+    # Якщо графік є — тільки при зміні.
+    tomorrow_notification_needed = (
+        tomorrow is None or tomorrow_changed
+    )
 
-    if today is not None and today_changed:
+    # Якщо змінився сьогоднішній графік або потрібно повідомити
+    # про завтра — формуємо одне спільне повідомлення.
+    if today_changed or tomorrow_notification_needed:
 
-        print("Сьогоднішній графік змінився. Надсилаємо повідомлення.")
+        sections = []
 
-        message = create_telegram_message(
-            schedule=today,
-            date_string=today_date,
-            group=group,
-            day_name="Сьогодні",
-        )
+        # ----------------------------------------------------
+        # СЬОГОДНІ
+        # ----------------------------------------------------
 
-        send_telegram_message(message)
+        if today is not None:
 
-    else:
-        print("Сьогоднішній графік не змінився.")
+            today_message = create_telegram_message(
+                schedule=today,
+                date_string=today_date,
+                group=group,
+                day_name="Сьогодні",
+            )
 
-    # --------------------------------------------------------
-    # ПОВІДОМЛЕННЯ НА ЗАВТРА
-    # --------------------------------------------------------
+            sections.append(today_message)
 
-    if tomorrow is not None:
+        # ----------------------------------------------------
+        # ЗАВТРА
+        # ----------------------------------------------------
 
-        if tomorrow_changed:
+        if tomorrow is not None:
 
-            print("Завтрашній графік змінився. Надсилаємо повідомлення.")
-
-            message = create_telegram_message(
+            tomorrow_message = create_telegram_message(
                 schedule=tomorrow,
                 date_string=tomorrow_date,
                 group=group,
                 day_name="Завтра",
             )
 
-            send_telegram_message(message)
-
         else:
-            print("Завтрашній графік не змінився.")
+
+            tomorrow_message = (
+                "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА — ЗАВТРА</b>\n\n"
+                "📍 Займище, вул. Центральна, 21\n"
+                f"📅 <b>{format_date(tomorrow_date)}</b>\n"
+                f"🔢 Черга <b>{html.escape(group)}</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "ℹ️ <b>Графік на завтра ще не опубліковано.</b>\n\n"
+                "ДТЕК поки не надав інформацію про відключення.\n\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "<i>Джерело: ДТЕК Київські регіональні електромережі</i>"
+            )
+
+        sections.append(tomorrow_message)
+
+        # Одне повідомлення замість двох.
+        combined_message = "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(sections)
+
+        send_telegram_message(combined_message)
+
+        print("Спільне повідомлення успішно надіслано.")
 
     else:
-
-        print("Графік на завтра відсутній. Надсилаємо повідомлення.")
-
-        message = (
-            "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА — ЗАВТРА</b>\n\n"
-            "📍 Займище, вул. Центральна, 21\n"
-            f"📅 <b>{format_date(tomorrow_date)}</b>\n"
-            f"🔢 Черга <b>{html.escape(group)}</b>\n\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "ℹ️ <b>Графік на завтра ще не опубліковано.</b>\n\n"
-            "ДТЕК поки не надав інформацію про відключення.\n\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "<i>Джерело: ДТЕК Київські регіональні електромережі</i>"
-        )
-
-        # Надсилаємо під час кожної перевірки.
-        send_telegram_message(message)
+        print("Графік не змінився. Повідомлення не надсилаємо.")
 
     # --------------------------------------------------------
     # ЗБЕРЕЖЕННЯ СТАНУ
@@ -584,3 +582,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
