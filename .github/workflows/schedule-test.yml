@@ -1,0 +1,15 @@
+name: Schedule Trigger Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "22,52 * * * *"
+
+jobs:
+  schedule-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm scheduled trigger
+        run: |
+          echo "SCHEDULE_TEST_OK"
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S')"
