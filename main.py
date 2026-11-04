@@ -28,6 +28,10 @@ CITY = "с. Займище"
 STREET = "вул. Центральна"
 HOUSE = "21"
 
+# Використовуємо виключно цю чергу.
+TARGET_GROUP_ID = "GPV4.1"
+TARGET_QUEUE_DISPLAY = "4.1"
+
 STATE_FILE = Path("state.json")
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
@@ -285,6 +289,8 @@ def create_telegram_message(
     lines = [
         "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА</b>",
         "",
+        f"<b>ЧЕРГА - {TARGET_QUEUE_DISPLAY}</b>",
+        "",
     ]
 
     append_schedule_section(
@@ -393,102 +399,7 @@ def save_state(snapshot):
 
 
 # ============================================================
-# ДІАГНОСТИКА ЧЕРГ БУДИНКУ
-# ============================================================
-
-async def diagnose_house_queues(client):
-    print("\n========== ДІАГНОСТИКА ЧЕРГ ==========")
-
-    print(f"Адреса: {CITY}, {STREET}, {HOUSE}")
-
-    if not hasattr(client, "get_home_num"):
-        print(
-            "Метод get_home_num відсутній у цій версії клієнта."
-        )
-        print("Діагностику пропускаємо.")
-        print("========== КІНЕЦЬ ДІАГНОСТИКИ ==========\n")
-        return
-
-    try:
-        response = await client.get_home_num(
-            city=CITY,
-            street=STREET,
-        )
-
-        print("Відповідь get_home_num отримана.")
-
-        houses = getattr(response, "houses", None)
-
-        if houses is None:
-            print(
-                "У відповіді немає атрибута houses."
-            )
-            print("Повна відповідь:")
-            print(object_to_dict(response))
-            return
-
-        house = houses.get(HOUSE)
-
-        if house is None:
-            print(f"Будинок {HOUSE} не знайдено.")
-            print(
-                "Доступні будинки:",
-                list(houses.keys()),
-            )
-            return
-
-        group_ids = getattr(house, "group_ids", None)
-
-        print(f"Черги будинку: {group_ids}")
-        print(
-            "Основна черга:",
-            getattr(house, "primary_group", None),
-        )
-        print(
-            "Кілька черг:",
-            getattr(house, "is_multi_group", None),
-        )
-        print(
-            "Поточне відключення:",
-            getattr(house, "has_current_outage", None),
-        )
-
-        if not group_ids:
-            print("Список черг порожній.")
-            return
-
-        fact = getattr(response, "fact", None)
-
-        if fact is None:
-            print("У відповіді немає об'єкта fact.")
-            return
-
-        print("\nГРАФІКИ ЗА КОЖНОЮ ЧЕРГОЮ:")
-
-        for group_id in group_ids:
-            print(f"\nЧерга {group_id}:")
-
-            try:
-                schedule = fact.get_group_today(group_id)
-                print(object_to_dict(schedule))
-
-            except Exception as error:
-                print(
-                    f"Не вдалося отримати графік черги "
-                    f"{group_id}: {type(error).__name__}: {error}"
-                )
-
-    except Exception as error:
-        print("ПОМИЛКА ДІАГНОСТИКИ ЧЕРГ")
-        print(f"Тип: {type(error).__name__}")
-        print(f"Повідомлення: {error}")
-
-    finally:
-        print("\n========== КІНЕЦЬ ДІАГНОСТИКИ ==========\n")
-
-
-# ============================================================
-# ОТРИМАННЯ ГРАФІКА ДТЕК
+# ОТРИМАННЯ ГРАФІКА ДТЕК САМЕ ДЛЯ GPV4.1
 # ============================================================
 
 async def get_dtek_schedule():
@@ -533,37 +444,60 @@ async def get_dtek_schedule():
         session=session,
     ) as client:
 
-        print("Перевірка адреси ДТЕК...")
-        print(f"Адреса: {CITY}, {STREET}, {HOUSE}")
+        print("Отримання інформації про будинок...")
 
         try:
-            address = await client.get_group_by_address(
+            response = await client.get_home_num(
                 city=CITY,
                 street=STREET,
-                house_number=HOUSE,
             )
 
-            print("Адресу успішно перевірено.")
-            print("Результат:", object_to_dict(address))
+            house = response.houses.get(HOUSE)
 
-            # Діагностика черг не повинна блокувати
-            # основне отримання графіка.
-            await diagnose_house_queues(client)
+            if house is None:
+                raise RuntimeError(
+                    f"Будинок {HOUSE} не знайдено у відповіді ДТЕК."
+                )
+
+            group_ids = house.group_ids or []
+
+            print(f"Черги будинку: {group_ids}")
+            print(f"Обрана черга: {TARGET_GROUP_ID}")
+
+            if TARGET_GROUP_ID not in group_ids:
+                raise RuntimeError(
+                    f"Черга {TARGET_GROUP_ID} відсутня "
+                    f"у списку черг будинку: {group_ids}"
+                )
+
+            if response.fact is None:
+                raise RuntimeError(
+                    "ДТЕК не повернув фактичний графік (fact)."
+                )
+
+            fact = response.fact
 
             print("Отримання графіка на сьогодні...")
 
-            today = await client.get_today_schedule(
-                city=CITY,
-                street=STREET,
-                house_number=HOUSE,
-            )
+            today = fact.get_group_today(TARGET_GROUP_ID)
 
             print("Отримання графіка на завтра...")
 
-            tomorrow = await client.get_tomorrow_schedule(
-                city=CITY,
-                street=STREET,
-                house_number=HOUSE,
+            tomorrow_timestamp = fact.today_ts + 86400
+
+            tomorrow = fact.get_group_day(
+                tomorrow_timestamp,
+                TARGET_GROUP_ID,
+            )
+
+            print(
+                f"Графік на сьогодні для {TARGET_GROUP_ID}: "
+                f"{object_to_dict(today)}"
+            )
+
+            print(
+                f"Графік на завтра для {TARGET_GROUP_ID}: "
+                f"{object_to_dict(tomorrow)}"
             )
 
             return today, tomorrow
@@ -603,6 +537,8 @@ async def main():
 
     print("=" * 50)
     print("ПЕРЕВІРКА ГРАФІКА ДТЕК")
+    print(f"Адреса: {CITY}, {STREET}, {HOUSE}")
+    print(f"Черга: {TARGET_GROUP_ID}")
     print(f"Дата: {today_date}")
     print(f"Час: {now.strftime('%H:%M:%S')}")
     print("=" * 50)
@@ -632,10 +568,18 @@ async def main():
 
     if today is None and tomorrow is None:
         raise RuntimeError(
-            "ДТЕК не повернув графік ні на сьогодні, ні на завтра."
+            f"ДТЕК не повернув графік для {TARGET_GROUP_ID} "
+            "ні на сьогодні, ні на завтра."
         )
 
     previous_state = load_previous_state() or {}
+
+    # Порівнюємо також номер черги.
+    # Після переходу зі старої версії на GPV4.1
+    # це спричинить одне оновлення повідомлення.
+    group_changed = (
+        previous_state.get("group") != TARGET_GROUP_ID
+    )
 
     today_changed = (
         previous_state.get("date") != today_date
@@ -647,9 +591,7 @@ async def main():
         or previous_state.get("tomorrow") != tomorrow
     )
 
-    # Повідомлення надсилається лише тоді,
-    # коли змінився графік на сьогодні або завтра.
-    if today_changed or tomorrow_changed:
+    if group_changed or today_changed or tomorrow_changed:
         message = create_telegram_message(
             today=today,
             tomorrow=tomorrow,
@@ -662,7 +604,7 @@ async def main():
 
         send_telegram_message(message)
 
-        print("Спільне повідомлення успішно надіслано.")
+        print("Повідомлення успішно надіслано.")
 
     else:
         print(
@@ -671,6 +613,7 @@ async def main():
         )
 
     snapshot = {
+        "group": TARGET_GROUP_ID,
         "date": today_date,
         "tomorrow_date": tomorrow_date,
         "today": today,
