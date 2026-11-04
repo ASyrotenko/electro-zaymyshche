@@ -215,7 +215,7 @@ async def get_dtek_schedule():
         tomorrow_schedule = await client.get_tomorrow_schedule(
             city=CITY,
             street=STREET,
-            house=HOUSE,
+            house_number=HOUSE,
         )
 
         return {
