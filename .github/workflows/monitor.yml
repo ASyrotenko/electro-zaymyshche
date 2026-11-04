@@ -1,9 +1,17 @@
+
 name: DTEK Electricity Monitor
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "7,37 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dtek-electricity-monitor
+  cancel-in-progress: false
 
 jobs:
   check-schedule:
@@ -29,6 +37,22 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Check DTEK address
+      - name: Check DTEK and send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
+
+      - name: Save previous schedule
         run: |
-          python main.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add state.json
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update DTEK schedule state"
+            git push
+          else
+            echo "Schedule state has not changed."
+          fi
