@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from dtek_client.exceptions import DtekDataError
 
 from curl_cffi.requests import AsyncSession
 from dtek_client import DtekClient
@@ -408,28 +409,36 @@ async def get_dtek_schedule():
 
         print("Перевірка адреси ДТЕК...")
 
-        address = await client.get_group_by_address(
-            city=CITY,
-            street=STREET,
-            house_number=HOUSE,
-        )
+        try:
+            address = await client.get_group_by_address(
+                city=CITY,
+                street=STREET,
+                house_number=HOUSE,
+            )
 
-        print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
-        print(f"Інформація про адресу: {address}")
+            print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
+            print(f"Інформація про адресу: {address}")
 
-        today_schedule = await client.get_today_schedule(
-            city=CITY,
-            street=STREET,
-            house_number=HOUSE,
-        )
+            today_schedule = await client.get_today_schedule(
+                city=CITY,
+                street=STREET,
+                house_number=HOUSE,
+            )
 
-        tomorrow_schedule = await client.get_tomorrow_schedule(
-            city=CITY,
-            street=STREET,
-            house_number=HOUSE,
-        )
+            tomorrow_schedule = await client.get_tomorrow_schedule(
+                city=CITY,
+                street=STREET,
+                house_number=HOUSE,
+            )
 
-    return today_schedule, tomorrow_schedule
+            return today_schedule, tomorrow_schedule
+
+        except DtekDataError as error:
+            print("ПОМИЛКА ДТЕК AJAX")
+            print(f"Тип помилки: {type(error).__name__}")
+            print(f"Повідомлення: {error}")
+            print(f"Відповідь сервера: {getattr(error, 'raw', None)}")
+            raise
 
 
 # ============================================================
