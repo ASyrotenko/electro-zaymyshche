@@ -3,16 +3,18 @@ import asyncio
 import html
 import json
 import os
-from datetime import datetime
+
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from dtek_client.exceptions import DtekDataError
 
 from curl_cffi.requests import AsyncSession
 from dtek_client import DtekClient
 from dtek_client.browser_auth import get_cleared_cookies
+from dtek_client.exceptions import DtekDataError
 
 
 # ============================================================
@@ -24,12 +26,13 @@ SCHEDULE_URL = f"{BASE_URL}/ua/shutdowns"
 AJAX_URL = f"{BASE_URL}/ua/ajax"
 
 CITY = "с. Займище"
-STREET = "вул. Центральна"
+STREET = "Центральна"
 HOUSE = "21"
 
 EXPECTED_GROUP = "4.1"
 
 STATE_FILE = Path("state.json")
+
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -37,31 +40,11 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
 # ============================================================
-# СТАТУСИ ЕЛЕКТРОЕНЕРГІЇ
-# ============================================================
-
-STATUS_INFO = {
-    "YES": {
-        "emoji": "🟢",
-        "text": "Світло є",
-    },
-    "NO": {
-        "emoji": "🔴",
-        "text": "Світла немає",
-    },
-    "MAYBE": {
-        "emoji": "🟡",
-        "text": "Можливе відключення",
-    },
-}
-
-
-# ============================================================
 # ДОПОМІЖНІ ФУНКЦІЇ
 # ============================================================
 
 def object_to_dict(value):
-    """Перетворює об'єкт бібліотеки на словник, якщо можливо."""
+    """Перетворює об'єкт бібліотеки на словник."""
 
     if value is None:
         return None
@@ -82,42 +65,51 @@ def object_to_dict(value):
 
 
 def get_status_code(value):
-    """Отримує текстовий код статусу."""
+    """Нормалізує статус ДТЕК до текстового значення."""
 
     if value is None:
         return None
 
+    if isinstance(value, dict):
+        value = (
+            value.get("status")
+            or value.get("value")
+            or value.get("code")
+        )
+
     if hasattr(value, "value"):
         value = value.value
-
-    if hasattr(value, "name"):
+    elif hasattr(value, "name"):
         value = value.name
 
     return str(value).upper().strip()
 
 
-def normalize_schedule(schedule):
-    """Нормалізує графік до словника година -> статус."""
+def normalize_schedule(raw_schedule):
+    """Нормалізує графік ДТЕК."""
 
-    schedule = object_to_dict(schedule)
-
-    if schedule is None:
+    if raw_schedule is None:
         return None
+
+    schedule = object_to_dict(raw_schedule)
 
     if not isinstance(schedule, dict):
-        return None
+        raise ValueError(
+            f"Невідомий формат графіка ДТЕК: {schedule}"
+        )
 
-    # Якщо бібліотека повернула об'єкт із вкладеним графіком.
-    for key in ("schedule", "hours", "data"):
+    # Якщо бібліотека повернула графік усередині окремого поля.
+    for key in ("schedule", "data", "hours"):
         nested = schedule.get(key)
 
         if isinstance(nested, dict):
             schedule = nested
             break
 
-    result = {}
+    normalized = {}
 
-    for hour, value in schedule.items():
+    for hour, status in schedule.items():
+
         try:
             hour_number = int(hour)
         except (TypeError, ValueError):
@@ -126,98 +118,29 @@ def normalize_schedule(schedule):
         if not 1 <= hour_number <= 24:
             continue
 
-        status = get_status_code(value)
+        status_code = get_status_code(status)
 
-        if status in ("YES", "NO", "FIRST", "SECOND", "MFIRST", "MSECOND"):
-            result[str(hour_number)] = status
-
-    return result or None
-
-
-def get_schedule_intervals(schedule):
-    """
-    Перетворює погодинний графік на інтервали.
-
-    YES      — світло є всю годину.
-    NO       — світла немає всю годину.
-    FIRST    — перша половина без світла, друга зі світлом.
-    SECOND   — перша половина зі світлом, друга без світла.
-    MFIRST   — можливе відключення першої половини.
-    MSECOND  — можливе відключення другої половини.
-    """
-
-    schedule = normalize_schedule(schedule)
-
-    if not schedule:
-        return []
-
-    segments = []
-
-    for hour in range(1, 25):
-        status = schedule.get(str(hour))
-
-        if status is None:
-            continue
-
-        start = (hour - 1) * 60
-
-        if status == "YES":
-            parts = [
-                (start, start + 60, "YES"),
-            ]
-
-        elif status == "NO":
-            parts = [
-                (start, start + 60, "NO"),
-            ]
-
-        elif status == "FIRST":
-            parts = [
-                (start, start + 30, "NO"),
-                (start + 30, start + 60, "YES"),
-            ]
-
-        elif status == "SECOND":
-            parts = [
-                (start, start + 30, "YES"),
-                (start + 30, start + 60, "NO"),
-            ]
-
-        elif status == "MFIRST":
-            parts = [
-                (start, start + 30, "MAYBE"),
-                (start + 30, start + 60, "YES"),
-            ]
-
-        elif status == "MSECOND":
-            parts = [
-                (start, start + 30, "YES"),
-                (start + 30, start + 60, "MAYBE"),
-            ]
-
-        else:
-            continue
-
-        segments.extend(parts)
-
-    # Об'єднуємо сусідні інтервали з однаковим статусом.
-    intervals = []
-
-    for start, end, status in segments:
-        if (
-            intervals
-            and intervals[-1]["end"] == start
-            and intervals[-1]["status"] == status
+        if status_code not in (
+            "YES",
+            "NO",
+            "FIRST",
+            "SECOND",
+            "MFIRST",
+            "MSECOND",
         ):
-            intervals[-1]["end"] = end
-        else:
-            intervals.append({
-                "start": start,
-                "end": end,
-                "status": status,
-            })
+            continue
 
-    return intervals
+        normalized[str(hour_number)] = status_code
+
+    if not normalized:
+        return None
+
+    return dict(
+        sorted(
+            normalized.items(),
+            key=lambda item: int(item[0])
+        )
+    )
 
 
 def format_time(minutes):
@@ -227,78 +150,201 @@ def format_time(minutes):
         return "24:00"
 
     hours = minutes // 60
-    mins = minutes % 60
+    remaining_minutes = minutes % 60
 
-    return f"{hours:02d}:{mins:02d}"
+    return f"{hours:02d}:{remaining_minutes:02d}"
 
 
 def format_date(date_string):
-    """Форматує дату для повідомлення."""
+    """Перетворює YYYY-MM-DD на DD.MM.YYYY."""
 
-    try:
-        date = datetime.strptime(date_string, "%Y-%m-%d")
-        return date.strftime("%d.%m.%Y")
-    except (TypeError, ValueError):
-        return date_string
+    return datetime.strptime(
+        date_string,
+        "%Y-%m-%d"
+    ).strftime("%d.%m.%Y")
 
 
 # ============================================================
-# ФОРМУВАННЯ TELEGRAM-ПОВІДОМЛЕННЯ
+# ФОРМУВАННЯ ЧАСОВИХ ІНТЕРВАЛІВ
 # ============================================================
 
-def create_telegram_message(schedule, date_string, group, day_name):
-    """Створює HTML-повідомлення для Telegram."""
+def get_schedule_intervals(schedule):
+    """
+    Розбиває графік на півгодинні інтервали
+    та об'єднує сусідні інтервали з однаковим статусом.
+    """
+
+    if schedule is None:
+        return []
+
+    half_hour_statuses = []
+
+    for hour in range(1, 25):
+
+        status = schedule.get(str(hour))
+
+        if status is None:
+            continue
+
+        start_minutes = (hour - 1) * 60
+
+        if status == "YES":
+            statuses = ["YES", "YES"]
+
+        elif status == "NO":
+            statuses = ["NO", "NO"]
+
+        elif status == "FIRST":
+            statuses = ["NO", "YES"]
+
+        elif status == "SECOND":
+            statuses = ["YES", "NO"]
+
+        elif status == "MFIRST":
+            statuses = ["MAYBE", "YES"]
+
+        elif status == "MSECOND":
+            statuses = ["YES", "MAYBE"]
+
+        else:
+            continue
+
+        for half_index, half_status in enumerate(statuses):
+
+            half_hour_statuses.append({
+                "start": start_minutes + half_index * 30,
+                "end": start_minutes + (half_index + 1) * 30,
+                "status": half_status,
+            })
+
+    if not half_hour_statuses:
+        return []
+
+    # Об'єднуємо сусідні інтервали з однаковим статусом.
+    merged = []
+
+    for item in half_hour_statuses:
+
+        if (
+            merged
+            and merged[-1]["status"] == item["status"]
+            and merged[-1]["end"] == item["start"]
+        ):
+            merged[-1]["end"] = item["end"]
+
+        else:
+            merged.append(item.copy())
+
+    result = []
+
+    for item in merged:
+        result.append({
+            "start": format_time(item["start"]),
+            "end": format_time(item["end"]),
+            "status": item["status"],
+        })
+
+    return result
+
+
+# ============================================================
+# ФОРМУВАННЯ ПОВІДОМЛЕННЯ TELEGRAM
+# ============================================================
+
+def append_schedule_section(lines, title, schedule, date_string):
+
+    lines.append(f"<b>{title}</b>")
+    lines.append(f"📅 <b>{format_date(date_string)}</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+
+    if schedule is None:
+
+        if title == "ЗАВТРА":
+            lines.append(
+                "ℹ️ <b>Графік на завтра ще не опубліковано.</b>"
+            )
+        else:
+            lines.append(
+                "ℹ️ <b>Графік на сьогодні недоступний.</b>"
+            )
+
+        return
 
     intervals = get_schedule_intervals(schedule)
 
-    date_formatted = format_date(date_string)
+    if not intervals:
+        lines.append("ℹ️ <b>Інформація про графік відсутня.</b>")
+        return
+
+    for interval in intervals:
+
+        status = interval["status"]
+
+        if status == "YES":
+            emoji = "🟢"
+            description = "Світло є"
+
+        elif status == "NO":
+            emoji = "🔴"
+            description = "Світла немає"
+
+        else:
+            emoji = "🟡"
+            description = "Можливе відключення"
+
+        lines.append(
+            f"{emoji} "
+            f"<b>{interval['start']} – {interval['end']}</b>"
+            f" · {description}"
+        )
+
+
+def create_telegram_message(
+    today,
+    tomorrow,
+    today_date,
+    tomorrow_date,
+):
+    """Створює одне спільне повідомлення для Telegram."""
 
     lines = [
-        f"<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА — {day_name.upper()}</b>",
+        "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА</b>",
         "",
-        "📍 Займище, вул. Центральна, 21",
-        f"📅 <b>{date_formatted}</b>",
-        f"🔢 Черга <b>{html.escape(str(group))}</b>",
-        "",
-        "━━━━━━━━━━━━━━━━━━",
     ]
 
-    if not intervals:
-        lines.extend([
-            "",
-            "ℹ️ Графік ще не опубліковано.",
-        ])
-    else:
-        for interval in intervals:
-            start = format_time(interval["start"])
-            end = format_time(interval["end"])
-
-            status = STATUS_INFO[interval["status"]]
-
-            lines.append(
-                f'{status["emoji"]} <b>{start} – {end}</b> '
-                f'· {status["text"]}'
-            )
+    append_schedule_section(
+        lines=lines,
+        title="СЬОГОДНІ",
+        schedule=today,
+        date_string=today_date,
+    )
 
     lines.extend([
-        "",
         "━━━━━━━━━━━━━━━━━━",
-        "<i>Джерело: ДТЕК Київські регіональні електромережі</i>",
+        "",
     ])
+
+    append_schedule_section(
+        lines=lines,
+        title="ЗАВТРА",
+        schedule=tomorrow,
+        date_string=tomorrow_date,
+    )
+
+    lines.append("━━━━━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
 
 # ============================================================
-# TELEGRAM
+# ВІДПРАВЛЕННЯ ПОВІДОМЛЕННЯ TELEGRAM
 # ============================================================
 
 def send_telegram_message(message):
-    """Надсилає текстове HTML-повідомлення в Telegram."""
 
     url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     )
 
     payload = {
@@ -309,8 +355,8 @@ def send_telegram_message(message):
     }
 
     request = Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
         },
@@ -321,42 +367,51 @@ def send_telegram_message(message):
         with urlopen(request, timeout=30) as response:
             result = json.loads(response.read().decode("utf-8"))
 
-        if not result.get("ok"):
-            raise RuntimeError(f"Telegram API error: {result}")
-
-        print("Telegram message sent successfully.")
-
     except HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
+        response_text = error.read().decode(
+            "utf-8",
+            errors="replace"
+        )
+
         raise RuntimeError(
-            f"Telegram HTTP error {error.code}: {body}"
-        ) from error
+            f"Помилка Telegram HTTP {error.code}: {response_text}"
+        )
 
     except URLError as error:
         raise RuntimeError(
-            f"Telegram connection error: {error}"
-        ) from error
+            f"Не вдалося підключитися до Telegram: {error}"
+        )
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            f"Telegram API повернув помилку: {result}"
+        )
+
+    print("Повідомлення успішно надіслано в Telegram.")
 
 
 # ============================================================
-# ЗБЕРЕЖЕННЯ ПОПЕРЕДНЬОГО ГРАФІКА
+# ЗБЕРЕЖЕННЯ ПОПЕРЕДНЬОГО СТАНУ
 # ============================================================
 
 def load_previous_state():
+
     if not STATE_FILE.exists():
         return None
 
     try:
         with STATE_FILE.open("r", encoding="utf-8") as file:
             return json.load(file)
+
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def save_state(state):
+def save_state(snapshot):
+
     with STATE_FILE.open("w", encoding="utf-8") as file:
         json.dump(
-            state,
+            snapshot,
             file,
             ensure_ascii=False,
             indent=2,
@@ -369,7 +424,7 @@ def save_state(state):
 
 async def get_dtek_schedule():
 
-    print("Отримання доступу до сайту ДТЕК...")
+    print("Підключення до ДТЕК...")
 
     cookies, csrf_token = await get_cleared_cookies(
         SCHEDULE_URL
@@ -381,7 +436,10 @@ async def get_dtek_schedule():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept": (
+            "application/json, text/javascript, "
+            "*/*; q=0.01"
+        ),
         "Accept-Language": "uk,en;q=0.9",
         "Origin": BASE_URL,
         "Referer": SCHEDULE_URL,
@@ -408,178 +466,166 @@ async def get_dtek_schedule():
     ) as client:
 
         print("Перевірка адреси ДТЕК...")
+        print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
 
         try:
+
             address = await client.get_group_by_address(
                 city=CITY,
                 street=STREET,
                 house_number=HOUSE,
             )
 
-            print(f"Адреса: {CITY}, вул. {STREET}, {HOUSE}")
-            print(f"Інформація про адресу: {address}")
+            print("Результат перевірки адреси:")
+            print(object_to_dict(address))
 
-            today_schedule = await client.get_today_schedule(
+            print("Отримання графіка на сьогодні...")
+
+            today = await client.get_today_schedule(
                 city=CITY,
                 street=STREET,
                 house_number=HOUSE,
             )
 
-            tomorrow_schedule = await client.get_tomorrow_schedule(
+            print("Отримання графіка на завтра...")
+
+            tomorrow = await client.get_tomorrow_schedule(
                 city=CITY,
                 street=STREET,
                 house_number=HOUSE,
             )
 
-            return today_schedule, tomorrow_schedule
+            return {
+                "group": EXPECTED_GROUP,
+                "today": today,
+                "tomorrow": tomorrow,
+            }
 
         except DtekDataError as error:
+
             print("ПОМИЛКА ДТЕК AJAX")
             print(f"Тип помилки: {type(error).__name__}")
             print(f"Повідомлення: {error}")
-            print(f"Відповідь сервера: {getattr(error, 'raw', None)}")
+            print(
+                "Відповідь сервера:",
+                getattr(error, "raw", None),
+            )
+
             raise
 
 
 # ============================================================
-# ОСНОВНА ЛОГІКА
+# ГОЛОВНА ФУНКЦІЯ
 # ============================================================
 
-
-
-
 async def main():
-
-    from datetime import timedelta
 
     now = datetime.now(KYIV_TZ)
 
     today_date = now.strftime("%Y-%m-%d")
+
     tomorrow_date = (
         now + timedelta(days=1)
     ).strftime("%Y-%m-%d")
 
     print("=" * 50)
-    print("Перевірка графіка ДТЕК")
+    print("ПЕРЕВІРКА ГРАФІКА ДТЕК")
     print(f"Дата: {today_date}")
     print(f"Час: {now.strftime('%H:%M:%S')}")
     print("=" * 50)
 
-    today_raw, tomorrow_raw = await get_dtek_schedule()
+    dtek_data = await get_dtek_schedule()
 
-    today = normalize_schedule(today_raw)
-    tomorrow = normalize_schedule(tomorrow_raw)
+    today = normalize_schedule(
+        dtek_data["today"]
+    )
 
-    print("Графік на сьогодні:")
-    print(json.dumps(today, ensure_ascii=False, indent=2))
+    tomorrow = normalize_schedule(
+        dtek_data["tomorrow"]
+    )
 
-    print("Графік на завтра:")
-    print(json.dumps(tomorrow, ensure_ascii=False, indent=2))
+    print("\nГрафік на сьогодні:")
+    print(
+        json.dumps(
+            today,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    print("\nГрафік на завтра:")
+    print(
+        json.dumps(
+            tomorrow,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     if today is None and tomorrow is None:
         raise RuntimeError(
             "ДТЕК не повернув графік ні на сьогодні, ні на завтра."
         )
 
-    group = f"Черга {EXPECTED_GROUP}"
-
     previous_state = load_previous_state() or {}
 
     today_changed = (
         previous_state.get("date") != today_date
         or previous_state.get("today") != today
-        or previous_state.get("group") != group
     )
 
     tomorrow_changed = (
         previous_state.get("tomorrow_date") != tomorrow_date
         or previous_state.get("tomorrow") != tomorrow
-        or previous_state.get("group") != group
     )
 
-    # Повідомлення на завтра без графіка надсилаємо кожного разу.
-    # Якщо графік є — тільки при зміні.
+    # Якщо графіка на завтра немає — надсилаємо повідомлення
+    # під час кожної перевірки.
     tomorrow_notification_needed = (
         tomorrow is None or tomorrow_changed
     )
 
-    # Якщо змінився сьогоднішній графік або потрібно повідомити
-    # про завтра — формуємо одне спільне повідомлення.
     if today_changed or tomorrow_notification_needed:
 
-        sections = []
+        message = create_telegram_message(
+            today=today,
+            tomorrow=tomorrow,
+            today_date=today_date,
+            tomorrow_date=tomorrow_date,
+        )
 
-        # ----------------------------------------------------
-        # СЬОГОДНІ
-        # ----------------------------------------------------
+        print("\nПідготовлене повідомлення:")
+        print(message)
 
-        if today is not None:
+        send_telegram_message(message)
 
-            today_message = create_telegram_message(
-                schedule=today,
-                date_string=today_date,
-                group=group,
-                day_name="Сьогодні",
-            )
-
-            sections.append(today_message)
-
-        # ----------------------------------------------------
-        # ЗАВТРА
-        # ----------------------------------------------------
-
-        if tomorrow is not None:
-
-            tomorrow_message = create_telegram_message(
-                schedule=tomorrow,
-                date_string=tomorrow_date,
-                group=group,
-                day_name="Завтра",
-            )
-
-        else:
-
-            tomorrow_message = (
-                "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА — ЗАВТРА</b>\n\n"
-                "📍 Займище, вул. Центральна, 21\n"
-                f"📅 <b>{format_date(tomorrow_date)}</b>\n"
-                f"🔢 Черга <b>{html.escape(group)}</b>\n\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                "ℹ️ <b>Графік на завтра ще не опубліковано.</b>\n\n"
-                "ДТЕК поки не надав інформацію про відключення.\n\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "<i>Джерело: ДТЕК Київські регіональні електромережі</i>"
-            )
-
-        sections.append(tomorrow_message)
-
-        # Одне повідомлення замість двох.
-        combined_message = "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(sections)
-
-        send_telegram_message(combined_message)
-
-        print("Спільне повідомлення успішно надіслано.")
+        print("Повідомлення відправлено.")
 
     else:
-        print("Графік не змінився. Повідомлення не надсилаємо.")
 
-    # --------------------------------------------------------
-    # ЗБЕРЕЖЕННЯ СТАНУ
-    # --------------------------------------------------------
+        print(
+            "Графік не змінився. "
+            "Повідомлення не надсилаємо."
+        )
 
+    # Зберігаємо стан після успішної перевірки.
+    # Якщо відправлення Telegram завершилося помилкою,
+    # виконання сюди не дійде.
     snapshot = {
         "date": today_date,
         "tomorrow_date": tomorrow_date,
-        "group": group,
         "today": today,
         "tomorrow": tomorrow,
     }
 
     save_state(snapshot)
 
-    print("Перевірку завершено успішно.")
+    print("\nПеревірку завершено успішно.")
 
+
+# ============================================================
+# ЗАПУСК
+# ============================================================
 
 if __name__ == "__main__":
     asyncio.run(main())
-
