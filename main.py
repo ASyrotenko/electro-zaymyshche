@@ -89,23 +89,69 @@ def save_state(snapshot):
     )
 
 
+
 def format_schedule(title, schedule):
     lines = [title]
 
     if schedule is None:
-        lines.append("Підтверджений графік ще не опубліковано.")
+        lines.append("Графік ще не опубліковано.")
         return lines
 
     if not schedule:
         lines.append("Дані про часові інтервали відсутні.")
         return lines
 
-    for interval, status in schedule.items():
-        description = STATUS_NAMES.get(status, f"Невідомий статус ({status})")
-        lines.append(f"{interval} — {description}")
+    # Перетворюємо номери годин на числа
+    intervals = []
+
+    for hour, status in schedule.items():
+        try:
+            hour_number = int(hour)
+        except (TypeError, ValueError):
+            continue
+
+        if 1 <= hour_number <= 24:
+            intervals.append((hour_number, status))
+
+    intervals.sort(key=lambda item: item[0])
+
+    if not intervals:
+        lines.append("Не вдалося розпізнати часові інтервали.")
+        return lines
+
+    # Об'єднуємо сусідні години з однаковим статусом
+    start_hour = intervals[0][0] - 1
+    previous_hour = intervals[0][0]
+    previous_status = intervals[0][1]
+
+    def add_interval(start, end, status):
+        start_time = f"{start:02d}:00"
+        end_time = f"{end:02d}:00"
+
+        description = STATUS_NAMES.get(
+            status,
+            f"Невідомий статус ({status})"
+        )
+
+        lines.append(
+            f"{start_time} – {end_time} — {description}"
+        )
+
+    for hour, status in intervals[1:]:
+        if hour == previous_hour + 1 and status == previous_status:
+            previous_hour = hour
+            continue
+
+        add_interval(start_hour, previous_hour, previous_status)
+
+        start_hour = hour - 1
+        previous_hour = hour
+        previous_status = status
+
+    add_interval(start_hour, previous_hour, previous_status)
 
     return lines
-
+    
 
 def send_telegram_message(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
