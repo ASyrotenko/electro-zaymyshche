@@ -90,6 +90,7 @@ def save_state(snapshot):
 
 
 
+
 def format_schedule(title, schedule):
     lines = [title]
 
@@ -101,8 +102,15 @@ def format_schedule(title, schedule):
         lines.append("Дані про часові інтервали відсутні.")
         return lines
 
-    # Перетворюємо номери годин на числа
-    intervals = []
+    status_names = {
+        "NO": "Світла немає",
+        "YES": "Світло є",
+        "MAYBE": "Можливе відключення",
+        "UNKNOWN": "Статус невідомий",
+    }
+
+    # Перетворюємо кожну годину на два півгодинні інтервали
+    half_hours = []
 
     for hour, status in schedule.items():
         try:
@@ -110,47 +118,78 @@ def format_schedule(title, schedule):
         except (TypeError, ValueError):
             continue
 
-        if 1 <= hour_number <= 24:
-            intervals.append((hour_number, status))
+        if not 1 <= hour_number <= 24:
+            continue
 
-    intervals.sort(key=lambda item: item[0])
+        start = (hour_number - 1) * 2
 
-    if not intervals:
+        if status == "FIRST":
+            statuses = ["NO", "YES"]
+        elif status == "SECOND":
+            statuses = ["YES", "NO"]
+        elif status == "MFIRST":
+            statuses = ["MAYBE", "YES"]
+        elif status == "MSECOND":
+            statuses = ["YES", "MAYBE"]
+        else:
+            statuses = [status, status]
+
+        half_hours.append((start, statuses[0]))
+        half_hours.append((start + 1, statuses[1]))
+
+    half_hours.sort(key=lambda item: item[0])
+
+    if not half_hours:
         lines.append("Не вдалося розпізнати часові інтервали.")
         return lines
 
-    # Об'єднуємо сусідні години з однаковим статусом
-    start_hour = intervals[0][0] - 1
-    previous_hour = intervals[0][0]
-    previous_status = intervals[0][1]
+    # Об'єднуємо сусідні півгодини з однаковим статусом
+    start = half_hours[0][0]
+    previous = start
+    previous_status = half_hours[0][1]
 
-    def add_interval(start, end, status):
-        start_time = f"{start:02d}:00"
-        end_time = f"{end:02d}:00"
+    for interval, status in half_hours[1:]:
+        if interval == previous + 1 and status == previous_status:
+            previous = interval
+            continue
 
-        description = STATUS_NAMES.get(
-            status,
-            f"Невідомий статус ({status})"
+        start_minutes = start * 30
+        end_minutes = (previous + 1) * 30
+
+        start_time = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
+        end_time = f"{end_minutes // 60:02d}:{end_minutes % 60:02d}"
+
+        description = status_names.get(
+            previous_status,
+            f"Невідомий статус ({previous_status})"
         )
 
         lines.append(
             f"{start_time} – {end_time} — {description}"
         )
 
-    for hour, status in intervals[1:]:
-        if hour == previous_hour + 1 and status == previous_status:
-            previous_hour = hour
-            continue
-
-        add_interval(start_hour, previous_hour, previous_status)
-
-        start_hour = hour - 1
-        previous_hour = hour
+        start = interval
+        previous = interval
         previous_status = status
 
-    add_interval(start_hour, previous_hour, previous_status)
+    # Додаємо останній інтервал
+    start_minutes = start * 30
+    end_minutes = (previous + 1) * 30
+
+    start_time = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
+    end_time = f"{end_minutes // 60:02d}:{end_minutes % 60:02d}"
+
+    description = status_names.get(
+        previous_status,
+        f"Невідомий статус ({previous_status})"
+    )
+
+    lines.append(
+        f"{start_time} – {end_time} — {description}"
+    )
 
     return lines
+
     
 
 def send_telegram_message(message):
