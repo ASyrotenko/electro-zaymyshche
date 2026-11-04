@@ -236,7 +236,7 @@ def append_schedule_section(
 ):
     lines.append(f"<b>{title}</b>")
     lines.append(f"📅 <b>{format_date(date_string)}</b>")
-    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━")
 
     if schedule is None:
         if title == "ЗАВТРА":
@@ -299,7 +299,7 @@ def create_telegram_message(
     )
 
     lines.extend([
-        "━━━━━━━━━━━━━━━━━━",
+        "━━━━",
         "",
     ])
 
@@ -310,7 +310,7 @@ def create_telegram_message(
         date_string=tomorrow_date,
     )
 
-    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━")
 
     return "\n".join(lines)
 
