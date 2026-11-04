@@ -446,6 +446,7 @@ async def get_dtek_schedule():
 # ============================================================
 
 
+
 async def main():
 
     now = datetime.now(KYIV_TZ)
@@ -481,27 +482,36 @@ async def main():
 
     group = f"Черга {EXPECTED_GROUP}"
 
-    snapshot = {
-        "date": today_date,
-        "tomorrow_date": tomorrow_date,
-        "group": group,
-        "today": today,
-        "tomorrow": tomorrow,
-    }
+    previous_state = load_previous_state() or {}
 
-    previous_state = load_previous_state()
+    # --------------------------------------------------------
+    # ПОРІВНЯННЯ ГРАФІКА НА СЬОГОДНІ
+    # --------------------------------------------------------
 
-    if snapshot == previous_state:
-        print("Графік не змінився. Повідомлення не надсилаємо.")
-        return
+    today_changed = (
+        previous_state.get("date") != today_date
+        or previous_state.get("today") != today
+        or previous_state.get("group") != group
+    )
 
-    print("Виявлено новий або змінений графік.")
+    # --------------------------------------------------------
+    # ПОРІВНЯННЯ ГРАФІКА НА ЗАВТРА
+    # --------------------------------------------------------
+
+    tomorrow_changed = (
+        previous_state.get("tomorrow_date") != tomorrow_date
+        or previous_state.get("tomorrow") != tomorrow
+        or previous_state.get("group") != group
+    )
 
     # --------------------------------------------------------
     # ПОВІДОМЛЕННЯ НА СЬОГОДНІ
     # --------------------------------------------------------
 
-    if today is not None:
+    if today is not None and today_changed:
+
+        print("Сьогоднішній графік змінився. Надсилаємо повідомлення.")
+
         message = create_telegram_message(
             schedule=today,
             date_string=today_date,
@@ -511,20 +521,35 @@ async def main():
 
         send_telegram_message(message)
 
+    else:
+        print("Сьогоднішній графік не змінився.")
+
     # --------------------------------------------------------
     # ПОВІДОМЛЕННЯ НА ЗАВТРА
     # --------------------------------------------------------
 
     if tomorrow is not None:
-        # Якщо графік на завтра вже опублікований — показуємо його.
-        message = create_telegram_message(
-            schedule=tomorrow,
-            date_string=tomorrow_date,
-            group=group,
-            day_name="Завтра",
-        )
+
+        if tomorrow_changed:
+
+            print("Завтрашній графік змінився. Надсилаємо повідомлення.")
+
+            message = create_telegram_message(
+                schedule=tomorrow,
+                date_string=tomorrow_date,
+                group=group,
+                day_name="Завтра",
+            )
+
+            send_telegram_message(message)
+
+        else:
+            print("Завтрашній графік не змінився.")
+
     else:
-        # Якщо графіка ще немає — повідомляємо про це.
+
+        print("Графік на завтра відсутній. Надсилаємо повідомлення.")
+
         message = (
             "<b>⚡ ГРАФІК ВІДКЛЮЧЕНЬ СВІТЛА — ЗАВТРА</b>\n\n"
             "📍 Займище, вул. Центральна, 21\n"
@@ -537,10 +562,25 @@ async def main():
             "<i>Джерело: ДТЕК Київські регіональні електромережі</i>"
         )
 
-    send_telegram_message(message)
+        # Надсилаємо під час кожної перевірки.
+        send_telegram_message(message)
 
-    # Зберігаємо стан після успішного надсилання.
+    # --------------------------------------------------------
+    # ЗБЕРЕЖЕННЯ СТАНУ
+    # --------------------------------------------------------
+
+    snapshot = {
+        "date": today_date,
+        "tomorrow_date": tomorrow_date,
+        "group": group,
+        "today": today,
+        "tomorrow": tomorrow,
+    }
+
     save_state(snapshot)
 
     print("Перевірку завершено успішно.")
 
+
+if __name__ == "__main__":
+    asyncio.run(main())
