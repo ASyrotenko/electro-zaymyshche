@@ -228,17 +228,58 @@ def get_schedule_intervals(schedule):
 # ФОРМУВАННЯ ПОВІДОМЛЕННЯ
 # ============================================================
 
+def format_duration(minutes, always_show_minutes=False):
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if always_show_minutes or remaining_minutes:
+        return f"{hours} год {remaining_minutes:02d} хв"
+
+    return f"{hours} год"
+
+
+def get_outage_duration(intervals):
+    """
+    Рахуємо лише гарантовані відключення (NO).
+    Можливі відключення (MAYBE) показуємо окремо,
+    але не додаємо до загального часу без світла.
+    """
+    total_minutes = 0
+
+    for interval in intervals:
+        if interval["status"] != "NO":
+            continue
+
+        start_hour, start_minute = map(
+            int, interval["start"].split(":")
+        )
+        end_hour, end_minute = map(
+            int, interval["end"].split(":")
+        )
+
+        start = start_hour * 60 + start_minute
+        end = (
+            1440
+            if interval["end"] == "24:00"
+            else end_hour * 60 + end_minute
+        )
+
+        total_minutes += end - start
+
+    return total_minutes
+
+
 def append_schedule_section(
     lines,
     title,
     schedule,
     date_string,
 ):
-    lines.append(f"<b>{title}</b>")
-    lines.append(f"📅 <b>{format_date(date_string)}</b>")
-    lines.append("━━━━")
-
     if schedule is None:
+        lines.append(f"<b>{title}</b>")
+        lines.append(f"📅 <b>{format_date(date_string)}</b>")
+        lines.append("━━━━")
+
         if title == "ЗАВТРА":
             lines.append(
                 "ℹ️ <b>Графік на завтра ще не опубліковано.</b>"
@@ -251,32 +292,52 @@ def append_schedule_section(
         return
 
     intervals = get_schedule_intervals(schedule)
+    total_minutes = get_outage_duration(intervals)
+    total_duration = format_duration(
+        total_minutes,
+        always_show_minutes=True,
+    )
 
-    if not intervals:
-        lines.append(
-            "ℹ️ <b>Інформація про графік відсутня.</b>"
-        )
+    lines.append(f"<b>{title} (~{total_duration})</b>")
+    lines.append(f"📅 <b>{format_date(date_string)}</b>")
+    lines.append("━━━━")
+
+    # Прибираємо інтервали, коли світло є.
+    # Можливі відключення (MAYBE) залишаємо жовтими.
+    outage_intervals = [
+        interval
+        for interval in intervals
+        if interval["status"] in ("NO", "MAYBE")
+    ]
+
+    if not outage_intervals:
+        lines.append("💡 <b>Відключення не заплановані</b>")
         return
 
-    for interval in intervals:
+    for interval in outage_intervals:
         status = interval["status"]
 
-        if status == "YES":
-            emoji = "🟢"
-            description = "Світло є"
+        start_hour, start_minute = map(
+            int, interval["start"].split(":")
+        )
+        end_hour, end_minute = map(
+            int, interval["end"].split(":")
+        )
 
-        elif status == "NO":
-            emoji = "🔴"
-            description = "Світла немає"
+        start = start_hour * 60 + start_minute
+        end = (
+            1440
+            if interval["end"] == "24:00"
+            else end_hour * 60 + end_minute
+        )
+        duration = format_duration(end - start)
 
-        else:
-            emoji = "🟡"
-            description = "Можливе відключення"
+        emoji = "🔴" if status == "NO" else "🟡"
 
         lines.append(
             f"{emoji} "
             f"<b>{interval['start']} – {interval['end']}</b>"
-            f" · {description}"
+            f" · (~{duration})"
         )
 
 
