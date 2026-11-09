@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import os
@@ -278,7 +277,7 @@ def append_schedule_section(
     if schedule is None:
         lines.append(f"<b>{title}</b>")
         lines.append(f"📅 <b>{format_date(date_string)}</b>")
-        lines.append("━━━━")
+        lines.append("━━━━━━━━━━━━")
 
         if title == "ЗАВТРА":
             lines.append(
@@ -292,7 +291,9 @@ def append_schedule_section(
         return
 
     intervals = get_schedule_intervals(schedule)
+
     total_minutes = get_outage_duration(intervals)
+
     total_duration = format_duration(
         total_minutes,
         always_show_minutes=True,
@@ -300,21 +301,22 @@ def append_schedule_section(
 
     lines.append(f"<b>{title} (~{total_duration})</b>")
     lines.append(f"📅 <b>{format_date(date_string)}</b>")
-    lines.append("━━━━")
+    lines.append("━━━━━━━━━━━━")
 
-    # Прибираємо інтервали, коли світло є.
-    # Можливі відключення (MAYBE) залишаємо жовтими.
-    outage_intervals = [
-        interval
+    # Якщо немає ні гарантованих, ні можливих відключень,
+    # показуємо коротке повідомлення замість 24 годин зелених інтервалів.
+    has_outages = any(
+        interval["status"] in ("NO", "MAYBE")
         for interval in intervals
-        if interval["status"] in ("NO", "MAYBE")
-    ]
+    )
 
-    if not outage_intervals:
+    if not has_outages:
         lines.append("💡 <b>Відключення не заплановані</b>")
         return
 
-    for interval in outage_intervals:
+    # Якщо відключення є, показуємо повну шкалу:
+    # і світло є, і світла немає.
+    for interval in intervals:
         status = interval["status"]
 
         start_hour, start_minute = map(
@@ -325,14 +327,21 @@ def append_schedule_section(
         )
 
         start = start_hour * 60 + start_minute
+
         end = (
             1440
             if interval["end"] == "24:00"
             else end_hour * 60 + end_minute
         )
+
         duration = format_duration(end - start)
 
-        emoji = "🔴" if status == "NO" else "🟡"
+        if status == "YES":
+            emoji = "🟢"
+        elif status == "NO":
+            emoji = "🔴"
+        else:  # MAYBE
+            emoji = "🟡"
 
         lines.append(
             f"{emoji} "
@@ -362,7 +371,7 @@ def create_telegram_message(
     )
 
     lines.extend([
-        "━━━━",
+        "━━━━━━━━━━━━",
         "",
     ])
 
@@ -373,7 +382,7 @@ def create_telegram_message(
         date_string=tomorrow_date,
     )
 
-    lines.append("━━━━")
+    lines.append("━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
